@@ -1196,7 +1196,7 @@ export default function App() {
                         <div className="bg-slate-800/80 backdrop-blur p-4 rounded-xl border border-slate-700 space-y-4 mb-6 shrink-0">
                             <div className="flex flex-wrap items-center justify-between gap-4">
 
-                                {/* 1. MÓDSZERVÁLASZTÓ */}
+                                {/* Módszerválasztó */}
                                 <div className="flex items-center gap-1.5 bg-slate-900/80 p-1 rounded-xl border border-slate-700">
                                     <button
                                         onClick={() => setNavLayout('tree')}
@@ -1840,6 +1840,170 @@ export default function App() {
                                 className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
                             >
                                 {executingTransfer ? 'Végrehajtás...' : 'Végrehajtás ide'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* TÖMEGES CÍMKÉZÉS MODÁL */}
+            {isBulkModalOpen && (
+                <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
+                        <div className="p-5 border-b border-slate-700 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-semibold text-slate-100">
+                                    Tömeges címkehalmaz módosítás ({selectedFileIds.length} fájl)
+                                </h3>
+                                <p className="text-xs text-slate-400 mt-0.5">
+                                    Válassz ki címkéket hozzáadásra vagy elvételre az egyéb adatok megőrzésével.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setIsBulkModalOpen(false)}
+                                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-6 max-h-[70vh] overflow-y-auto">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                                    Új címke létrehozása a készletbe
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={bulkTagInput}
+                                        onChange={(e) => setBulkTagInput(e.target.value)}
+                                        onKeyDown={async (e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                const tag = await registerNewTagToPool(bulkTagInput);
+                                                if (tag) setBulkTagsToAdd((prev) => [...prev, tag]);
+                                                setBulkTagInput('');
+                                            }
+                                        }}
+                                        placeholder="Új címke neve..."
+                                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={async () => {
+                                            const tag = await registerNewTagToPool(bulkTagInput);
+                                            if (tag) setBulkTagsToAdd((prev) => [...prev, tag]);
+                                            setBulkTagInput('');
+                                        }}
+                                        className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                                    >
+                                        Felvétel
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                <span className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
+                  Elérhető címkék a poolból (Kattints a művelethez)
+                </span>
+                                <div className="flex flex-wrap gap-1.5 p-3 bg-slate-900/50 rounded-xl border border-slate-700/60 max-h-36 overflow-y-auto">
+                                    {tagPool.length > 0 ? (
+                                        tagPool.map((tag) => {
+                                            const isAdding = bulkTagsToAdd.includes(tag);
+                                            const isRemoving = bulkTagsToRemove.includes(tag);
+
+                                            return (
+                                                <div key={tag} className="inline-flex items-center rounded-md text-xs bg-slate-700 overflow-hidden">
+                                                    <span className="px-2 py-1 text-slate-200">#{tag}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setBulkTagsToRemove((prev) => prev.filter((t) => t !== tag));
+                                                            setBulkTagsToAdd((prev) =>
+                                                                prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                                                            );
+                                                        }}
+                                                        className={`px-1.5 py-1 text-xs font-bold transition-colors cursor-pointer ${
+                                                            isAdding ? 'bg-emerald-500 text-slate-950' : 'hover:bg-emerald-600 text-emerald-400'
+                                                        }`}
+                                                    >
+                                                        +
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setBulkTagsToAdd((prev) => prev.filter((t) => t !== tag));
+                                                            setBulkTagsToRemove((prev) =>
+                                                                prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+                                                            );
+                                                        }}
+                                                        className={`px-1.5 py-1 text-xs font-bold transition-colors cursor-pointer ${
+                                                            isRemoving ? 'bg-rose-500 text-white' : 'hover:bg-rose-600 text-rose-400'
+                                                        }`}
+                                                    >
+                                                        -
+                                                    </button>
+                                                </div>
+                                            );
+                                        })
+                                    ) : (
+                                        <span className="text-xs text-slate-500 italic p-1">
+                      Még nincsenek címkék a megosztásban.
+                    </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl">
+                  <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
+                    [+] Hozzáadás ({bulkTagsToAdd.length})
+                  </span>
+                                    <div className="flex flex-wrap gap-1">
+                                        {bulkTagsToAdd.map((tag) => (
+                                            <span key={tag} className="px-2 py-0.5 rounded text-xs bg-emerald-500/20 text-emerald-300">
+                        #{tag}
+                      </span>
+                                        ))}
+                                        {bulkTagsToAdd.length === 0 && (
+                                            <span className="text-xs text-slate-500 italic">Nincs kijelölve</span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-rose-950/20 border border-rose-500/30 rounded-xl">
+                  <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider block mb-2">
+                    [-] Törlés a halmazból ({bulkTagsToRemove.length})
+                  </span>
+                                    <div className="flex flex-wrap gap-1">
+                                        {bulkTagsToRemove.map((tag) => (
+                                            <span key={tag} className="px-2 py-0.5 rounded text-xs bg-rose-500/20 text-rose-300">
+                        #{tag}
+                      </span>
+                                        ))}
+                                        {bulkTagsToRemove.length === 0 && (
+                                            <span className="text-xs text-slate-500 italic">Nincs kijelölve</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-slate-700 bg-slate-850 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setIsBulkModalOpen(false)}
+                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                            >
+                                Mégse
+                            </button>
+                            <button
+                                type="button"
+                                disabled={bulkSaving || (bulkTagsToAdd.length === 0 && bulkTagsToRemove.length === 0)}
+                                onClick={() => { void handleExecuteBulkTags(); }}
+                                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
+                            >
+                                {bulkSaving ? 'Mentés...' : 'Műveletek végrehajtása'}
                             </button>
                         </div>
                     </div>
