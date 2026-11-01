@@ -56,6 +56,16 @@ interface MediaMeta {
 type GridDensity = 'sm' | 'md' | 'lg';
 type NavLayout = 'tree' | 'breadcrumb' | 'tags';
 
+// URL Paraméterek azonosítása (User mód és Tulajdonos UID)
+const urlParams = new URLSearchParams(window.location.search);
+const paramRootId = urlParams.get('rootId');
+const paramRootName = urlParams.get('rootName');
+const paramOwnerId = urlParams.get('ownerId');
+const isUserMode = Boolean(paramRootId);
+
+const systemRootId = paramRootId || 'root';
+const systemRootName = paramRootName ? decodeURIComponent(paramRootName) : 'Saját meghajtó';
+
 function MediaThumbnail({ src, alt }: { src?: string; alt: string }) {
     const [hasError, setHasError] = useState(false);
 
@@ -170,37 +180,39 @@ export default function App() {
     });
     const [loading, setLoading] = useState(true);
 
-    // Navigációs mód (Mappafa vs Breadcrumb vs Címkék)
+    // Navigációs mód
     const [navLayout, setNavLayout] = useState<NavLayout>('tags');
 
     // Mappa állapotok
     const [currentFolder, setCurrentFolder] = useState<BreadcrumbItem>({
-        id: 'root',
-        name: 'Saját meghajtó',
+        id: systemRootId,
+        name: systemRootName,
     });
     const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([
-        { id: 'root', name: 'Saját meghajtó' },
+        { id: systemRootId, name: systemRootName },
     ]);
 
     // Fastruktúra (Sidebar)
     const [folderTree, setFolderTree] = useState<FolderNode>({
-        id: 'root',
-        name: 'Saját meghajtó',
+        id: systemRootId,
+        name: systemRootName,
         isOpen: true,
         children: [],
     });
 
-    // Breadcrumb / Tags nézet almappái
+    // Almappák és rekurzió
     const [subfolders, setSubfolders] = useState<BreadcrumbItem[]>([]);
     const [fetchingFolders, setFetchingFolders] = useState(false);
     const [isRecursive, setIsRecursive] = useState(false);
-    const [viewModeBreadcrumb, setViewModeBreadcrumb] = useState<'folder' | 'all'>('folder');
 
     // Fájlok és szűrés
     const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
     const [fetchingFiles, setFetchingFiles] = useState(false);
     const [filterType, setFilterType] = useState<'all' | 'image' | 'video'>('all');
     const [gridDensity, setGridDensity] = useState<GridDensity>('md');
+
+    // Címkék közvetlen megjelenítése a kártyán (kapcsoló állapota)
+    const [showCardTags, setShowCardTags] = useState(false);
 
     // Kijelölési állapot
     const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
@@ -233,22 +245,30 @@ export default function App() {
     const [newFolderName, setNewFolderName] = useState('');
     const [creatingFolder, setCreatingFolder] = useState(false);
 
-    // Mozgatás / Linkelés ablak állapota
+    // Mozgatás / Linkelés ablak
     const [transferModalMode, setTransferModalMode] = useState<'link' | 'move' | null>(null);
     const [targetFolderTree, setTargetFolderTree] = useState<FolderNode>({
-        id: 'root',
-        name: 'Saját meghajtó',
+        id: systemRootId,
+        name: systemRootName,
         isOpen: true,
         children: [],
     });
     const [selectedTargetFolder, setSelectedTargetFolder] = useState<BreadcrumbItem>({
-        id: 'root',
-        name: 'Saját meghajtó',
+        id: systemRootId,
+        name: systemRootName,
     });
     const [recentTargetFolders, setRecentTargetFolders] = useState<BreadcrumbItem[]>([]);
     const [executingTransfer, setExecutingTransfer] = useState(false);
     const [quickNewFolderInTransfer, setQuickNewFolderInTransfer] = useState('');
     const [creatingQuickFolder, setCreatingQuickFolder] = useState(false);
+
+    // Megosztási link ablak (Admin)
+    const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+    const [linkCopied, setLinkCopied] = useState(false);
+
+    const getEffectiveOwnerId = useCallback((currentUser?: User | null) => {
+        return paramOwnerId || currentUser?.uid || user?.uid || '';
+    }, [user]);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -262,31 +282,34 @@ export default function App() {
                 setTagPool([]);
                 setMediaMetaMap({});
             } else {
-                void getDoc(doc(db, 'users', currentUser.uid, 'settings', 'tagPool'))
-                    .then((poolDoc) => {
-                        if (poolDoc.exists()) {
-                            setTagPool(poolDoc.data().tags || []);
-                        }
-                    })
-                    .catch((err) => console.error('Címketár hiba:', err));
+                const targetUid = getEffectiveOwnerId(currentUser);
+                if (targetUid) {
+                    void getDoc(doc(db, 'users', targetUid, 'settings', 'tagPool'))
+                        .then((poolDoc) => {
+                            if (poolDoc.exists()) {
+                                setTagPool(poolDoc.data().tags || []);
+                            }
+                        })
+                        .catch((err) => console.error('Címketár hiba:', err));
 
-                void getDocs(collection(db, 'users', currentUser.uid, 'media'))
-                    .then((metaSnap) => {
-                        const metaMap: Record<string, { tags: string[], isFavorite: boolean }> = {};
-                        metaSnap.forEach((docSnap) => {
-                            metaMap[docSnap.id] = {
-                                tags: docSnap.data().tags || [],
-                                isFavorite: docSnap.data().isFavorite || false
-                            };
-                        });
-                        setMediaMetaMap(metaMap);
-                    })
-                    .catch((err) => console.error('Kliensoldali metaadat hiba:', err));
+                    void getDocs(collection(db, 'users', targetUid, 'media'))
+                        .then((metaSnap) => {
+                            const metaMap: Record<string, { tags: string[], isFavorite: boolean }> = {};
+                            metaSnap.forEach((docSnap) => {
+                                metaMap[docSnap.id] = {
+                                    tags: docSnap.data().tags || [],
+                                    isFavorite: docSnap.data().isFavorite || false
+                                };
+                            });
+                            setMediaMetaMap(metaMap);
+                        })
+                        .catch((err) => console.error('Kliensoldali metaadat hiba:', err));
+                }
             }
             setLoading(false);
         });
         return () => unsubscribe();
-    }, []);
+    }, [getEffectiveOwnerId]);
 
     const handleLoginOrRefreshToken = async () => {
         try {
@@ -356,8 +379,8 @@ export default function App() {
 
     const reloadFolderTree = useCallback(async () => {
         if (user && accessToken) {
-            const subs = await fetchSubfoldersFromApi('root', accessToken);
-            setFolderTree({ id: 'root', name: 'Saját meghajtó', isOpen: true, children: subs });
+            const subs = await fetchSubfoldersFromApi(systemRootId, accessToken);
+            setFolderTree({ id: systemRootId, name: systemRootName, isOpen: true, children: subs });
         }
     }, [user, accessToken, fetchSubfoldersFromApi]);
 
@@ -410,7 +433,6 @@ export default function App() {
         }
     };
 
-    // Célmappafa kibontás/becsukás a Linkelő/Mozgató modálban
     const handleToggleTargetFolder = async (folder: FolderNode) => {
         if (folder.isOpen) {
             setTargetFolderTree((prev) =>
@@ -529,33 +551,25 @@ export default function App() {
             if (filterType === 'image') typeFilter = "(mimeType contains 'image/' or mimeType = 'application/vnd.google-apps.shortcut')";
             if (filterType === 'video') typeFilter = "(mimeType contains 'video/' or mimeType = 'application/vnd.google-apps.shortcut')";
 
-            const isBreadcrumbOrTags = navLayout === 'breadcrumb' || navLayout === 'tags';
+            if (isRecursive) {
+                const folderIds = await collectFolderIdsRecursively(folderId);
+                const chunkSize = 15;
+                const collectedFiles: DriveFile[] = [];
 
-            if (isBreadcrumbOrTags && viewModeBreadcrumb === 'all') {
-                const q = `trashed = false and ${typeFilter}`;
-                const allFiles = await fetchAllDriveFilesByQuery(q, currentToken);
-                setDriveFiles(allFiles);
-            } else {
-                if (isRecursive && isBreadcrumbOrTags) {
-                    const folderIds = await collectFolderIdsRecursively(folderId);
-                    const chunkSize = 15;
-                    const collectedFiles: DriveFile[] = [];
+                for (let i = 0; i < folderIds.length; i += chunkSize) {
+                    const chunk = folderIds.slice(i, i + chunkSize);
+                    const parentQueries = chunk.map((id) => `'${id}' in parents`).join(' or ');
+                    const q = `trashed = false and (${parentQueries}) and ${typeFilter}`;
 
-                    for (let i = 0; i < folderIds.length; i += chunkSize) {
-                        const chunk = folderIds.slice(i, i + chunkSize);
-                        const parentQueries = chunk.map((id) => `'${id}' in parents`).join(' or ');
-                        const q = `trashed = false and (${parentQueries}) and ${typeFilter}`;
-
-                        const chunkFiles = await fetchAllDriveFilesByQuery(q, currentToken);
-                        collectedFiles.push(...chunkFiles);
-                    }
-
-                    setDriveFiles(collectedFiles);
-                } else {
-                    const q = `trashed = false and '${folderId}' in parents and ${typeFilter}`;
-                    const files = await fetchAllDriveFilesByQuery(q, currentToken);
-                    setDriveFiles(files);
+                    const chunkFiles = await fetchAllDriveFilesByQuery(q, currentToken);
+                    collectedFiles.push(...chunkFiles);
                 }
+
+                setDriveFiles(collectedFiles);
+            } else {
+                const q = `trashed = false and '${folderId}' in parents and ${typeFilter}`;
+                const files = await fetchAllDriveFilesByQuery(q, currentToken);
+                setDriveFiles(files);
             }
         } catch (err: unknown) {
             console.error('Fájl lekérési hiba:', err);
@@ -564,11 +578,11 @@ export default function App() {
         } finally {
             setFetchingFiles(false);
         }
-    }, [accessToken, currentFolder.id, filterType, isRecursive, navLayout, viewModeBreadcrumb, collectFolderIdsRecursively]);
+    }, [accessToken, currentFolder.id, filterType, isRecursive, collectFolderIdsRecursively]);
 
     const handleSelectFolderFromTree = (folder: FolderNode) => {
         setCurrentFolder({ id: folder.id, name: folder.name });
-        setBreadcrumbs([{ id: 'root', name: 'Saját meghajtó' }, { id: folder.id, name: folder.name }]);
+        setBreadcrumbs([{ id: systemRootId, name: systemRootName }, { id: folder.id, name: folder.name }]);
         void loadMediaFiles(folder.id);
     };
 
@@ -621,19 +635,17 @@ export default function App() {
         }
     };
 
-    // Célmappa-választó megnyitása
     const openTransferModal = async (mode: 'link' | 'move') => {
         if (!accessToken) return;
         setTransferModalMode(mode);
         setQuickNewFolderInTransfer('');
         setSelectedTargetFolder({ id: currentFolder.id, name: currentFolder.name });
 
-        // Inicializáljuk a célmappa fát a gyökértől, hogy bármelyik ág szabadon kibontható legyen
         try {
-            const subs = await fetchSubfoldersFromApi('root', accessToken);
+            const subs = await fetchSubfoldersFromApi(systemRootId, accessToken);
             setTargetFolderTree({
-                id: 'root',
-                name: 'Saját meghajtó',
+                id: systemRootId,
+                name: systemRootName,
                 isOpen: true,
                 children: subs,
             });
@@ -642,7 +654,6 @@ export default function App() {
         }
     };
 
-    // Gyors új mappa készítése a kiválasztott célmappa alatt
     const handleCreateFolderInsideTransfer = async () => {
         if (!quickNewFolderInTransfer.trim() || !accessToken) return;
 
@@ -672,7 +683,6 @@ export default function App() {
                 children: [],
             };
 
-            // Beillesztjük a létrehozott mappát a fába és azonnal kijelöljük
             setTargetFolderTree((prev) =>
                 updateTreeNode(prev, parentId, (node) => ({
                     ...node,
@@ -692,7 +702,6 @@ export default function App() {
         }
     };
 
-    // Mozgatás vagy Linkelés végrehajtása
     const handleExecuteTransfer = async () => {
         if (!accessToken || selectedFileIds.length === 0 || !transferModalMode) return;
         setExecutingTransfer(true);
@@ -736,7 +745,6 @@ export default function App() {
             }
         }
 
-        // Elmentjük a legutóbbi célmappák közé
         setRecentTargetFolders((prev) => {
             const filtered = prev.filter((item) => item.id !== selectedTargetFolder.id);
             return [selectedTargetFolder, ...filtered].slice(0, 5);
@@ -752,6 +760,23 @@ export default function App() {
                 ? `Sikeresen létrehozva ${successCount} link a(z) "${selectedTargetFolder.name}" mappában!`
                 : `Sikeresen átmozgatva ${successCount} fájl a(z) "${selectedTargetFolder.name}" mappába!`
         );
+    };
+
+    const getShareableUserUrl = () => {
+        const base = window.location.origin + window.location.pathname;
+        const ownerId = getEffectiveOwnerId();
+        return `${base}?rootId=${encodeURIComponent(currentFolder.id)}&rootName=${encodeURIComponent(currentFolder.name)}&ownerId=${encodeURIComponent(ownerId)}`;
+    };
+
+    const handleCopyShareLink = async () => {
+        try {
+            await navigator.clipboard.writeText(getShareableUserUrl());
+            setLinkCopied(true);
+            setTimeout(() => setLinkCopied(false), 2500);
+        } catch (e) {
+            console.error(e);
+            alert('Nem sikerült vágólapra másolni a linket.');
+        }
     };
 
     const displayedFiles = driveFiles.filter((file) => {
@@ -782,13 +807,14 @@ export default function App() {
 
     const registerNewTagToPool = async (tag: string) => {
         const cleanTag = tag.trim().toLowerCase();
-        if (!cleanTag || !user) return cleanTag;
+        const targetUid = getEffectiveOwnerId();
+        if (!cleanTag || !targetUid) return cleanTag;
 
         if (!tagPool.includes(cleanTag)) {
             setTagPool((prev) => [...prev, cleanTag]);
             try {
                 await setDoc(
-                    doc(db, 'users', user.uid, 'settings', 'tagPool'),
+                    doc(db, 'users', targetUid, 'settings', 'tagPool'),
                     { tags: arrayUnion(cleanTag) },
                     { merge: true }
                 );
@@ -804,10 +830,11 @@ export default function App() {
         setMetaLoading(true);
         setTagInput('');
 
-        if (!user) return;
+        const targetUid = getEffectiveOwnerId();
+        if (!targetUid) return;
 
         try {
-            const docRef = doc(db, 'users', user.uid, 'media', file.id);
+            const docRef = doc(db, 'users', targetUid, 'media', file.id);
             const docSnap = await getDoc(docRef);
 
             if (docSnap.exists()) {
@@ -850,11 +877,12 @@ export default function App() {
     };
 
     const handleSaveMetadata = async () => {
-        if (!user || !activeFile) return;
+        const targetUid = getEffectiveOwnerId();
+        if (!targetUid || !activeFile) return;
 
         setMetaSaving(true);
         try {
-            const docRef = doc(db, 'users', user.uid, 'media', activeFile.id);
+            const docRef = doc(db, 'users', targetUid, 'media', activeFile.id);
             await setDoc(
                 docRef,
                 {
@@ -893,7 +921,8 @@ export default function App() {
     };
 
     const handleExecuteBulkTags = async () => {
-        if (!user || selectedFileIds.length === 0) return;
+        const targetUid = getEffectiveOwnerId();
+        if (!targetUid || selectedFileIds.length === 0) return;
         if (bulkTagsToAdd.length === 0 && bulkTagsToRemove.length === 0) {
             alert('Nincs kiválasztva sem hozzáadandó, sem eltávolítandó címke.');
             return;
@@ -904,7 +933,7 @@ export default function App() {
             const batch = writeBatch(db);
 
             selectedFileIds.forEach((fileId) => {
-                const fileRef = doc(db, 'users', user.uid, 'media', fileId);
+                const fileRef = doc(db, 'users', targetUid, 'media', fileId);
                 const updates: Record<string, unknown> = {
                     updatedAt: serverTimestamp(),
                 };
@@ -953,12 +982,13 @@ export default function App() {
     };
 
     const handleBulkFavoriteToggle = async (markAsFavorite: boolean) => {
-        if (!user || selectedFileIds.length === 0) return;
+        const targetUid = getEffectiveOwnerId();
+        if (!targetUid || selectedFileIds.length === 0) return;
 
         try {
             const batch = writeBatch(db);
             selectedFileIds.forEach((fileId) => {
-                const fileRef = doc(db, 'users', user.uid, 'media', fileId);
+                const fileRef = doc(db, 'users', targetUid, 'media', fileId);
                 batch.set(
                     fileRef,
                     {
@@ -1017,7 +1047,20 @@ export default function App() {
                     <div className="w-8 h-8 bg-sky-500 rounded-lg flex items-center justify-center font-bold text-slate-950 text-sm">
                         M
                     </div>
-                    <h1 className="text-xl font-bold text-sky-400">Media Manager</h1>
+                    <div>
+                        <h1 className="text-xl font-bold text-sky-400 flex items-center gap-2">
+                            <span>Media Manager</span>
+                            {isUserMode ? (
+                                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  User nézet
+                </span>
+                            ) : (
+                                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                  Admin mód
+                </span>
+                            )}
+                        </h1>
+                    </div>
                 </div>
 
                 {user ? (
@@ -1035,6 +1078,16 @@ export default function App() {
                 {user.displayName}
               </span>
                         </div>
+
+                        {!isUserMode && (
+                            <button
+                                onClick={() => setIsShareModalOpen(true)}
+                                className="px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                                title="User link készítése az aktuális mappához"
+                            >
+                                <span>🔗</span> User link generálása
+                            </button>
+                        )}
 
                         <button
                             onClick={() => { void handleLoginOrRefreshToken(); }}
@@ -1059,7 +1112,7 @@ export default function App() {
                     <div className="text-center py-20 px-8 bg-slate-800 rounded-2xl border border-slate-700 max-w-md w-full shadow-xl">
                         <h2 className="text-xl font-semibold mb-2">Üdvözöl a Media Manager!</h2>
                         <p className="text-slate-400 mb-6 text-sm">
-                            Jelentkezz be Google-fiókoddal a Drive-on tárolt médiafájljaid kezeléséhez.
+                            Jelentkezz be Google-fiókoddal a megosztott mappa kezeléséhez.
                         </p>
                         <button
                             onClick={() => { void handleLoginOrRefreshToken(); }}
@@ -1079,7 +1132,7 @@ export default function App() {
                                 <>
                                     <div className="flex items-center justify-between mb-3 px-2 shrink-0">
                     <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      Mappák (Google Drive)
+                      {isUserMode ? `Mappák (${systemRootName})` : 'Mappák (Google Drive)'}
                     </span>
                                         <button
                                             onClick={() => { void reloadFolderTree(); }}
@@ -1115,7 +1168,7 @@ export default function App() {
 
                                     <div className="space-y-2 px-2">
                                         {tagPool.length === 0 ? (
-                                            <div className="text-xs text-slate-500 italic">Még nincsenek címkék.</div>
+                                            <div className="text-xs text-slate-500 italic">Még nincsenek címkék a megosztásban.</div>
                                         ) : (
                                             tagPool.map((tag) => (
                                                 <label key={tag} className="flex items-center gap-2.5 text-sm text-slate-300 hover:text-white cursor-pointer group">
@@ -1143,7 +1196,7 @@ export default function App() {
                         <div className="bg-slate-800/80 backdrop-blur p-4 rounded-xl border border-slate-700 space-y-4 mb-6 shrink-0">
                             <div className="flex flex-wrap items-center justify-between gap-4">
 
-                                {/* Módszerválasztó */}
+                                {/* 1. MÓDSZERVÁLASZTÓ */}
                                 <div className="flex items-center gap-1.5 bg-slate-900/80 p-1 rounded-xl border border-slate-700">
                                     <button
                                         onClick={() => setNavLayout('tree')}
@@ -1171,7 +1224,7 @@ export default function App() {
                                     </button>
                                 </div>
 
-                                {/* Új mappa + Szűrők, Rácsméret és Beolvasás */}
+                                {/* Új mappa + Szűrők, Kártyacímke kapcsoló, Rácsméret és Beolvasás */}
                                 <div className="flex flex-wrap items-center gap-3">
                                     <button
                                         onClick={() => setIsCreateFolderModalOpen(true)}
@@ -1207,6 +1260,21 @@ export default function App() {
                                             Videók
                                         </button>
                                     </div>
+
+                                    {/* CÍMKÉK MEGJELENÍTÉSE A KÁRTYÁN KAPCSOLÓ */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCardTags((prev) => !prev)}
+                                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+                                            showCardTags
+                                                ? 'bg-sky-500 text-slate-950 font-bold shadow-md'
+                                                : 'bg-slate-900/60 text-slate-400 hover:text-white border border-slate-700'
+                                        }`}
+                                        title="Címkék mutatása vagy elrejtése közvetlenül a kártyákon"
+                                    >
+                                        <span>🏷️</span>
+                                        <span>Címkék: {showCardTags ? 'BE' : 'KI'}</span>
+                                    </button>
 
                                     <div className="flex items-center gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-700">
                                         <button
@@ -1250,75 +1318,56 @@ export default function App() {
                                 <div className="pt-3 border-t border-slate-700/60 space-y-3">
                                     <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/40 p-2.5 rounded-lg border border-slate-700/50">
                                         <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={() => setViewModeBreadcrumb('folder')}
-                                                className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
-                                                    viewModeBreadcrumb === 'folder' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white'
-                                                }`}
-                                            >
-                                                📁 Mappa nézet
-                                            </button>
-                                            <button
-                                                onClick={() => setViewModeBreadcrumb('all')}
-                                                className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer ${
-                                                    viewModeBreadcrumb === 'all' ? 'bg-sky-500 text-slate-950' : 'text-slate-400 hover:text-white'
-                                                }`}
-                                            >
-                                                🌐 Teljes Drive
-                                            </button>
+                      <span className="text-xs font-medium text-slate-300">
+                        📁 Mappa: <strong className="text-sky-300">{currentFolder.name}</strong>
+                      </span>
                                         </div>
 
-                                        {viewModeBreadcrumb === 'folder' && (
-                                            <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 select-none">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isRecursive}
-                                                    onChange={(e) => setIsRecursive(e.target.checked)}
-                                                    className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
-                                                />
-                                                <span>Almappák fájljai is (rekurzív)</span>
-                                            </label>
-                                        )}
+                                        <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={isRecursive}
+                                                onChange={(e) => setIsRecursive(e.target.checked)}
+                                                className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
+                                            />
+                                            <span>Almappák fájljai is (rekurzív)</span>
+                                        </label>
                                     </div>
 
-                                    {viewModeBreadcrumb === 'folder' && (
-                                        <div className="flex items-center gap-1.5 text-xs bg-slate-900/30 p-2 rounded-lg border border-slate-700/40 flex-wrap">
-                                            <span className="text-slate-500 font-semibold uppercase mr-1">Útvonal:</span>
-                                            {breadcrumbs.map((crumb, idx) => (
-                                                <div key={crumb.id} className="flex items-center gap-1.5">
-                                                    {idx > 0 && <span className="text-slate-600">/</span>}
-                                                    <button
-                                                        onClick={() => handleJumpToBreadcrumb(idx)}
-                                                        className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
-                                                            idx === breadcrumbs.length - 1 ? 'bg-sky-500/20 text-sky-300 font-semibold' : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                                                        }`}
-                                                    >
-                                                        {crumb.name}
-                                                    </button>
-                                                </div>
+                                    <div className="flex items-center gap-1.5 text-xs bg-slate-900/30 p-2 rounded-lg border border-slate-700/40 flex-wrap">
+                                        <span className="text-slate-500 font-semibold uppercase mr-1">Útvonal:</span>
+                                        {breadcrumbs.map((crumb, idx) => (
+                                            <div key={crumb.id} className="flex items-center gap-1.5">
+                                                {idx > 0 && <span className="text-slate-600">/</span>}
+                                                <button
+                                                    onClick={() => handleJumpToBreadcrumb(idx)}
+                                                    className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+                                                        idx === breadcrumbs.length - 1 ? 'bg-sky-500/20 text-sky-300 font-semibold' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                                    }`}
+                                                >
+                                                    {crumb.name}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div>
+                                        {fetchingFolders && (
+                                            <div className="text-xs text-sky-400 mb-1">Mappák keresése folyamatban...</div>
+                                        )}
+                                        <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
+                                            {subfolders.map((folder) => (
+                                                <button
+                                                    key={folder.id}
+                                                    onClick={() => handleEnterFolderBreadcrumb(folder)}
+                                                    className="px-3 py-1.5 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 border border-slate-600 text-xs flex items-center gap-1.5 transition-all cursor-pointer group"
+                                                >
+                                                    <span>📂</span>
+                                                    <span className="truncate max-w-[150px]">{folder.name}</span>
+                                                </button>
                                             ))}
                                         </div>
-                                    )}
-
-                                    {viewModeBreadcrumb === 'folder' && (
-                                        <div>
-                                            {fetchingFolders && (
-                                                <div className="text-xs text-sky-400 mb-1">Mappák keresése folyamatban...</div>
-                                            )}
-                                            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto p-1">
-                                                {subfolders.map((folder) => (
-                                                    <button
-                                                        key={folder.id}
-                                                        onClick={() => handleEnterFolderBreadcrumb(folder)}
-                                                        className="px-3 py-1.5 rounded-lg bg-slate-700/70 hover:bg-slate-700 text-slate-200 border border-slate-600 text-xs flex items-center gap-1.5 transition-all cursor-pointer group"
-                                                    >
-                                                        <span>📂</span>
-                                                        <span className="truncate max-w-[150px]">{folder.name}</span>
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
+                                    </div>
                                 </div>
                             )}
 
@@ -1371,6 +1420,9 @@ export default function App() {
                                         ? file.thumbnailLink.replace(/=s\d+/, gridDensity === 'lg' ? '=s800' : '=s400')
                                         : undefined;
 
+                                    const fileMeta = mediaMetaMap[file.id];
+                                    const fileTags = fileMeta?.tags || [];
+
                                     return (
                                         <div
                                             key={file.id}
@@ -1414,6 +1466,21 @@ export default function App() {
                                                         <span>{formatFileSize(file.size)}</span>
                                                         <span>{file.createdTime ? new Date(file.createdTime).toLocaleDateString() : ''}</span>
                                                     </p>
+
+                                                    {/* Címkék megjelenítése a kártyán, ha a kapcsoló be van kapcsolva */}
+                                                    {showCardTags && fileTags.length > 0 && (
+                                                        <div className="flex flex-wrap gap-1 mt-2.5 max-h-16 overflow-y-auto">
+                                                            {fileTags.map((tag) => (
+                                                                <span
+                                                                    key={tag}
+                                                                    className="px-1.5 py-0.5 rounded text-[10px] bg-slate-700/80 text-sky-300 border border-slate-600/50 truncate max-w-[120px]"
+                                                                    title={`#${tag}`}
+                                                                >
+                                  #{tag}
+                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
                                                 </div>
 
                                                 <div className={`mt-2.5 pt-2.5 border-t border-slate-700/60 flex items-center justify-between ${gridDensity === 'sm' ? 'text-[11px]' : 'text-xs'}`}>
@@ -1472,14 +1539,14 @@ export default function App() {
                         <button
                             onClick={() => { void openTransferModal('link'); }}
                             className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
-                            title="Parancsikonok (linkek) készítése a képekre egy másik mappában"
+                            title="Parancsikonok készítése a kijelölt mappában"
                         >
                             <span>🔗</span> Linkelés mappába
                         </button>
                         <button
                             onClick={() => { void openTransferModal('move'); }}
                             className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
-                            title="Fájlok áthelyezése egy másik mappába"
+                            title="Fájlok áthelyezése"
                         >
                             <span>📦</span> Mozgatás
                         </button>
@@ -1501,7 +1568,75 @@ export default function App() {
                 </div>
             )}
 
-            {/* ÚJ MAPPA MODÁLIS ABLAK */}
+            {/* ADMIN: USER LINK GENERÁLÓ MODÁL */}
+            {isShareModalOpen && (
+                <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+                        <div className="p-5 border-b border-slate-700 flex items-center justify-between">
+                            <h3 className="font-semibold text-slate-100 flex items-center gap-2">
+                                <span>🔗</span> User link generálása
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setIsShareModalOpen(false)}
+                                className="text-slate-400 hover:text-white p-1 rounded-lg"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-4">
+                            <p className="text-xs text-slate-300 leading-relaxed">
+                                Ez a link egy korlátozott felületet indít el, amellyel a felhasználó kizárólag a kiválasztott mappa alatt böngészhet, és <strong>nem tud felfelé navigálni</strong>:
+                            </p>
+
+                            <div className="p-3 bg-slate-900/80 border border-slate-700 rounded-xl space-y-1">
+                                <span className="text-[10px] uppercase font-semibold text-slate-500 block">Kijelölt gyökérmappa:</span>
+                                <span className="text-sm font-bold text-sky-400 flex items-center gap-1.5">
+                  📁 {currentFolder.name}
+                </span>
+                            </div>
+
+                            <div>
+                                <label className="block text-[11px] font-semibold text-slate-400 mb-1 uppercase tracking-wider">
+                                    Megosztható URL (tartalmazza a címketár azonosítót is)
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        readOnly
+                                        value={getShareableUserUrl()}
+                                        className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 font-mono select-all focus:outline-none"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => { void handleCopyShareLink(); }}
+                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0"
+                                    >
+                                        {linkCopied ? '✓ Másolva!' : 'Másolás'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 leading-relaxed">
+                                💡 A felhasználó látni fogja a fotókhoz tartozó címkéket és szűrhet is rájuk!
+                            </div>
+                        </div>
+
+                        <div className="p-4 border-t border-slate-700 bg-slate-850 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setIsShareModalOpen(false)}
+                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                            >
+                                Bezárás
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ÚJ MAPPA MODÁL */}
             {isCreateFolderModalOpen && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                     <form
@@ -1561,7 +1696,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* ÁTLINKELÉS / MOZGATÁS MODÁLIS ABLAK (KÉTPANELES MAPPAFA BÖNGÉSZŐVEL) */}
+            {/* ÁTLINKELÉS / MOZGATÁS MODÁL (INTERAKTÍV MAPPAFÁVAL) */}
             {transferModalMode && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                     <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col">
@@ -1587,10 +1722,7 @@ export default function App() {
                         </div>
 
                         <div className="p-5 space-y-4">
-                            {/* Kétpaneles elrendezés: Gyorsválasztó (bal) + Mappafa (jobb) */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
-                                {/* 1. Bal oszlop: Gyors választó & Legutóbbi célok */}
                                 <div className="md:col-span-1 space-y-3 border-b md:border-b-0 md:border-r border-slate-700/60 pb-3 md:pb-0 md:pr-3">
                   <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
                     Gyors választó
@@ -1612,9 +1744,9 @@ export default function App() {
 
                                         <button
                                             type="button"
-                                            onClick={() => setSelectedTargetFolder({ id: 'root', name: 'Saját meghajtó' })}
+                                            onClick={() => setSelectedTargetFolder({ id: systemRootId, name: systemRootName })}
                                             className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
-                                                selectedTargetFolder.id === 'root'
+                                                selectedTargetFolder.id === systemRootId
                                                     ? 'bg-sky-500/20 text-sky-300 font-semibold border border-sky-500/40'
                                                     : 'bg-slate-900/40 hover:bg-slate-700/60 text-slate-300'
                                             }`}
@@ -1624,7 +1756,6 @@ export default function App() {
                                         </button>
                                     </div>
 
-                                    {/* Legutóbb használt célmappák listája */}
                                     {recentTargetFolders.length > 0 && (
                                         <div className="pt-2">
                       <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
@@ -1651,11 +1782,10 @@ export default function App() {
                                     )}
                                 </div>
 
-                                {/* 2. Jobb oszlop: Interaktív, kibontható Google Drive Mappafa */}
                                 <div className="md:col-span-2 flex flex-col min-h-0">
                                     <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                      Tallózás a teljes mappafában
+                      Tallózás a mappafában
                     </span>
                                         <span className="text-[10px] text-slate-500">Nyisd le az ágakat a nyilakkal</span>
                                     </div>
@@ -1671,7 +1801,6 @@ export default function App() {
                                 </div>
                             </div>
 
-                            {/* Új mappa készítése közvetlenül a kiválasztott célpont alá */}
                             <div className="pt-3 border-t border-slate-700/60 flex flex-wrap items-center justify-between gap-3 bg-slate-900/30 p-2.5 rounded-xl border border-slate-700/40">
                 <span className="text-xs text-slate-300">
                   Új almappa a(z) <strong>{selectedTargetFolder.name}</strong> mappán belül:
@@ -1681,12 +1810,6 @@ export default function App() {
                                         type="text"
                                         value={quickNewFolderInTransfer}
                                         onChange={(e) => setQuickNewFolderInTransfer(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                void handleCreateFolderInsideTransfer();
-                                            }
-                                        }}
                                         placeholder="Új almappa neve..."
                                         className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
                                     />
@@ -1723,171 +1846,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* Tömeges címkézés modál */}
-            {isBulkModalOpen && (
-                <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
-                        <div className="p-5 border-b border-slate-700 flex items-center justify-between">
-                            <div>
-                                <h3 className="font-semibold text-slate-100">
-                                    Tömeges címkehalmaz módosítás ({selectedFileIds.length} fájl)
-                                </h3>
-                                <p className="text-xs text-slate-400 mt-0.5">
-                                    Válassz ki címkéket hozzáadásra vagy elvételre az egyéb adatok megőrzésével.
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => setIsBulkModalOpen(false)}
-                                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
-                            >
-                                ✕
-                            </button>
-                        </div>
-
-                        <div className="p-5 space-y-6 max-h-[70vh] overflow-y-auto">
-                            <div>
-                                <label className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
-                                    Új címke létrehozása a készletbe
-                                </label>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={bulkTagInput}
-                                        onChange={(e) => setBulkTagInput(e.target.value)}
-                                        onKeyDown={async (e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault();
-                                                const tag = await registerNewTagToPool(bulkTagInput);
-                                                if (tag) setBulkTagsToAdd((prev) => [...prev, tag]);
-                                                setBulkTagInput('');
-                                            }
-                                        }}
-                                        placeholder="Új címke neve..."
-                                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-sky-500"
-                                    />
-                                    <button
-                                        type="button"
-                                        onClick={async () => {
-                                            const tag = await registerNewTagToPool(bulkTagInput);
-                                            if (tag) setBulkTagsToAdd((prev) => [...prev, tag]);
-                                            setBulkTagInput('');
-                                        }}
-                                        className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
-                                    >
-                                        Felvétel
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div>
-                <span className="block text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">
-                  Elérhető címkék a poolból (Kattints a művelethez)
-                </span>
-                                <div className="flex flex-wrap gap-1.5 p-3 bg-slate-900/50 rounded-xl border border-slate-700/60 max-h-36 overflow-y-auto">
-                                    {tagPool.length > 0 ? (
-                                        tagPool.map((tag) => {
-                                            const isAdding = bulkTagsToAdd.includes(tag);
-                                            const isRemoving = bulkTagsToRemove.includes(tag);
-
-                                            return (
-                                                <div key={tag} className="inline-flex items-center rounded-md text-xs bg-slate-700 overflow-hidden">
-                                                    <span className="px-2 py-1 text-slate-200">#{tag}</span>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setBulkTagsToRemove((prev) => prev.filter((t) => t !== tag));
-                                                            setBulkTagsToAdd((prev) =>
-                                                                prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                                                            );
-                                                        }}
-                                                        className={`px-1.5 py-1 text-xs font-bold transition-colors cursor-pointer ${
-                                                            isAdding ? 'bg-emerald-500 text-slate-950' : 'hover:bg-emerald-600 text-emerald-400'
-                                                        }`}
-                                                    >
-                                                        +
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            setBulkTagsToAdd((prev) => prev.filter((t) => t !== tag));
-                                                            setBulkTagsToRemove((prev) =>
-                                                                prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-                                                            );
-                                                        }}
-                                                        className={`px-1.5 py-1 text-xs font-bold transition-colors cursor-pointer ${
-                                                            isRemoving ? 'bg-rose-500 text-white' : 'hover:bg-rose-600 text-rose-400'
-                                                        }`}
-                                                    >
-                                                        -
-                                                    </button>
-                                                </div>
-                                            );
-                                        })
-                                    ) : (
-                                        <span className="text-xs text-slate-500 italic p-1">
-                      Még nincsenek címkék a készletben.
-                    </span>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-xl">
-                  <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider block mb-2">
-                    [+] Hozzáadás ({bulkTagsToAdd.length})
-                  </span>
-                                    <div className="flex flex-wrap gap-1">
-                                        {bulkTagsToAdd.map((tag) => (
-                                            <span key={tag} className="px-2 py-0.5 rounded text-xs bg-emerald-500/20 text-emerald-300">
-                        #{tag}
-                      </span>
-                                        ))}
-                                        {bulkTagsToAdd.length === 0 && (
-                                            <span className="text-xs text-slate-500 italic">Nincs kijelölve</span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="p-3 bg-rose-950/20 border border-rose-500/30 rounded-xl">
-                  <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider block mb-2">
-                    [-] Törlés a halmazból ({bulkTagsToRemove.length})
-                  </span>
-                                    <div className="flex flex-wrap gap-1">
-                                        {bulkTagsToRemove.map((tag) => (
-                                            <span key={tag} className="px-2 py-0.5 rounded text-xs bg-rose-500/20 text-rose-300">
-                        #{tag}
-                      </span>
-                                        ))}
-                                        {bulkTagsToRemove.length === 0 && (
-                                            <span className="text-xs text-slate-500 italic">Nincs kijelölve</span>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="p-4 border-t border-slate-700 bg-slate-850 flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setIsBulkModalOpen(false)}
-                                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-                            >
-                                Mégse
-                            </button>
-                            <button
-                                type="button"
-                                disabled={bulkSaving || (bulkTagsToAdd.length === 0 && bulkTagsToRemove.length === 0)}
-                                onClick={() => { void handleExecuteBulkTags(); }}
-                                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
-                            >
-                                {bulkSaving ? 'Mentés...' : 'Műveletek végrehajtása'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Egyedi metaadat szerkesztő modál */}
+            {/* EGYEDI METAADAT SZERKESZTŐ MODÁL */}
             {activeFile && (
                 <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                     <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
